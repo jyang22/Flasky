@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 import os
-print 'line 1'
 from app import create_app, db
-print 'line 2'
-from app.models import User, Role
+from app.models import User, Role, Post
 from flask.ext.script import Manager, Shell
 from flask.ext.migrate import Migrate, MigrateCommand
 
@@ -19,3 +17,5 @@ manager.add_command('db', MigrateCommand)
 
 if __name__ == '__main__': 
     manager.run()
+    User.generate_fake(100)
+    Post.generate_fake(100)
