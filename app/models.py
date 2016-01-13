@@ -8,6 +8,16 @@ from flask import current_app, request
 from . import db
 import hashlib
 
+
+class Follow(db.Model):
+    __tablename__ = 'follows'
+    follower_id = db.Column(db.Integer, db.ForeignKey('users.id'),
+                            primary_key=True)
+    followed_id = db.Column(db.Integer, db.ForeignKey('users.id'),
+                            primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -27,6 +37,21 @@ class User(UserMixin, db.Model):
 
     # avatar
     avatar_hash = db.Column(db.String(32))
+
+    # followers
+    followed = db.relationship('Follow',
+                               foreign_keys=[Follow.follower_id],
+                               backref=db.backref('follower', lazy='joined'),
+                               lazy='dynamic',
+                               cascade='all, delete-orphan')
+    followers = db.relationship('Follow',
+                                foreign_keys=[Follow.followed_id],
+                                backref=db.backref('followed', lazy='joined'),
+                                lazy='dynamic',
+                                cascade='all, delete-orphan')
+
+    # comments
+    comments = db.relationship('Comment', backref='author', lazy='dynamic')
 
     @property
     def password(self):
@@ -92,6 +117,43 @@ class User(UserMixin, db.Model):
         return '{url}/{hash}?s={size}&d={default}&r={rating}'.format(
                     url=url, hash=hash, size=size, default=default, rating=rating)
 
+    # follow
+    def follow(self, user):
+        if not self.is_following(user):
+            f = Follow(follower=self, followed=user)
+            db.session.add(f)
+
+    def unfollow(self, user):
+        f = self.followed.filter_by(followed_id=user.id).first() 
+        if f:
+            db.session.delete(f)
+
+    def is_following(self, user): 
+        return self.followed.filter_by(
+            followed_id=user.id).first() is not None 
+
+    def is_followed_by(self, user):
+        return self.followers.filter_by( 
+            follower_id=user.id).first() is not None
+
+    @property
+    def followed_posts(self):
+        return Post.query.join(Follow, Follow.followed_id == Post.author_id)\
+                            .filter(Follow.follower_id == self.id)
+
+    # follow themselves
+    def __init__(self, **kwargs): 
+        # ...
+        self.follow(self)
+
+    @staticmethod
+    def add_self_follows():
+        for user in User.query.all():
+            if not user.is_following(user): 
+                user.follow(user) 
+                db.session.add(user) 
+                db.session.commit()
+
 
 class Role(db.Model):
     __tablename__ = 'roles'
@@ -132,6 +194,7 @@ class Post(db.Model):
     body = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow) 
     author_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    comments = db.relationship('Comment', backref='post', lazy='dynamic')
 
     # generate fake blog posts
     @staticmethod
@@ -148,6 +211,29 @@ class Post(db.Model):
                      author=u)
             db.session.add(p)
             db.session.commit()
+
+
+# db.event.listen(Post.body, 'set', Post.on_changed_body)
+
+
+class Comment(db.Model):
+    __tablename__ = 'comments'
+    id = db.Column(db.Integer, primary_key=True)
+    body = db.Column(db.Text)
+    body_html = db.Column(db.Text)
+    disabled = db.Column(db.Boolean)
+    timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow) 
+    author_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'))
+
+    @staticmethod
+    def on_changed_body(target, value, oldvalue, initiator): 
+        allowed_tags = ['a', 'abbr', 'acronym', 'b', 'code', 'em', 'i',
+                            'strong']
+        target.body_html = bleach.linkify(bleach.clean(
+            markdown(value, output_format='html'),
+            tags=allowed_tags, strip=True))
+
 
 
 class Permission: 
